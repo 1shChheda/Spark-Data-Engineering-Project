@@ -1,0 +1,6 @@
+pyspark
+pandas
+pyyaml
+requests
+jupyter
+pytest

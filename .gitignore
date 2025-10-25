@@ -1,0 +1,18 @@
+#python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.env
+
+#jupyter
+.ipynb_checkpoints
+
+#spark output
+data/processed/
+logs/
+
+#OS
+.DS_Store
+Thumbs.db
