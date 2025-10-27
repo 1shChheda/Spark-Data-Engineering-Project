@@ -1,7 +1,5 @@
-pyspark
-pandas
-pyyaml
-requests
-jupyter
-pytest
-python-dotenv
+pyspark==3.5.0
+pandas==2.1.4
+pyyaml==6.0.1
+pytest==7.4.3
+python-dotenv==1.0.0

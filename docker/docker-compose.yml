@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  spark-app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: data_eng_app
+    volumes:
+      - ../data:/app/data
+      - ../src:/app/src
+      - ../config:/app/config
+    environment:
+      - SPARK_HOME=/usr/local/lib/python3.11/site-packages/pyspark
+      - PYTHONUNBUFFERED=1
+    working_dir: /app
+    command: python -m src.app
