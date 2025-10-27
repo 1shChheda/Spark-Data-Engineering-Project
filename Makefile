@@ -3,7 +3,7 @@ setup:
 	. venv/Scripts/activate; pip install -r requirements.txt
 
 run:
-	. venv/Scripts/activate; python src/app.py
+	. venv/Scripts/activate; python -m src.app
 
 test:
 	. venv/Scripts/activate; pytest tests/
