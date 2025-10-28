@@ -1,15 +1,17 @@
-.PHONY: help setup build up down run logs clean test
+.PHONY: help setup build up down run logs clean test spark-ui status
 
 help:
 	@echo "Available commands:"
-	@echo "  make setup    - Initial project setup"
-	@echo "  make build    - Build Docker containers"
-	@echo "  make up       - Start containers in background"
-	@echo "  make run      - Run the application"
-	@echo "  make logs     - View container logs"
-	@echo "  make down     - Stop and remove containers"
-	@echo "  make clean    - Clean generated files"
-	@echo "  make test     - Run tests"
+	@echo "  make setup     - Initial project setup"
+	@echo "  make build     - Build Docker containers"
+	@echo "  make up        - Start Spark cluster"
+	@echo "  make run       - Run the application"
+	@echo "  make logs      - View application logs"
+	@echo "  make spark-ui  - Open Spark Master UI"
+	@echo "  make status    - Check cluster status"
+	@echo "  make down      - Stop cluster"
+	@echo "  make clean     - Clean generated files"
+	@echo "  make test      - Run tests"
 
 setup:
 	@echo "Setting up project..."
@@ -17,28 +19,41 @@ setup:
 
 build:
 	@echo "Building Docker images..."
-	docker-compose -f docker/docker-compose.yml build
+	cd docker && docker-compose build
 
 up:
-	@echo "Starting containers..."
-	docker-compose -f docker/docker-compose.yml up -d
+	@echo "Starting Spark cluster..."
+	cd docker && docker-compose up -d
+	@echo "Waiting for cluster to initialize..."
+	@sleep 10
+	@echo "✓ Cluster ready!"
+	@echo "  Spark Master UI: http://localhost:8080"
+	@echo "  Spark Worker UI: http://localhost:8081"
 
 run:
 	@echo "Running application..."
-	docker-compose -f docker/docker-compose.yml up
+	cd docker && docker-compose exec spark-app python -m src.app
 
 logs:
-	docker-compose -f docker/docker-compose.yml logs -f
+	cd docker && docker-compose logs -f spark-app
+
+spark-ui:
+	@echo "Opening Spark Master UI..."
+	@cmd /c start http://localhost:8080
+
+status:
+	@echo "Cluster Status:"
+	cd docker && docker-compose ps
 
 down:
-	@echo "Stopping containers..."
-	docker-compose -f docker/docker-compose.yml down
+	@echo "Stopping Spark cluster..."
+	cd docker && docker-compose down
 
 clean:
 	@echo "Cleaning up..."
 	rm -rf data/processed/*
-	find . -type d -name "__pycache__" -exec rm -rf {} +
-	find . -type f -name "*.pyc" -delete
+	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	find . -type f -name "*.pyc" -delete 2>/dev/null || true
 
 test:
-	docker-compose -f docker/docker-compose.yml run --rm spark-app pytest tests/ -v
+	cd docker && docker-compose run --rm spark-app pytest tests/ -v

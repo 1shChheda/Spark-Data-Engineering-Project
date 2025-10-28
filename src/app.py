@@ -6,6 +6,9 @@ def main():
     
     spark = create_spark_session()
     
+    print(f"Spark Master: {spark.sparkContext.master}")
+    print(f"Spark Version: {spark.version}")
+    
     try:
         data = [
             (1, "Alice", 29, "Engineer"),
@@ -19,14 +22,14 @@ def main():
         print("\n=== DataFrame Created ===")
         df.show()
         
-        output_path = "data/processed/output.csv"
-        os.makedirs("data/processed", exist_ok=True)
+        output_dir = "data/processed/output"
+        os.makedirs(output_dir, exist_ok=True)
         
-        df.coalesce(1).write.mode("overwrite").option("header", "true").csv(output_path)
+        df.coalesce(1).write.mode("overwrite").option("header", "true").csv(output_dir)
         
-        print(f"\n=== Data written to {output_path} ===")
+        print(f"\n=== Data written to {output_dir} ===")
         
-        read_df = spark.read.option("header", "true").csv(output_path)
+        read_df = spark.read.option("header", "true").csv(output_dir)
         print("\n=== Data read back from CSV ===")
         read_df.show()
         

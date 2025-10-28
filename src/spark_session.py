@@ -9,13 +9,13 @@ def create_spark_session():
         config = yaml.safe_load(f)
     
     spark_config = config['spark']
-    builder = SparkSession.builder.appName(spark_config['app_name'])
     
-    if 'master' in spark_config:
-        builder = builder.master(spark_config['master'])
+    master = os.getenv('SPARK_MASTER', spark_config.get('master', 'local[*]'))
+    
+    builder = SparkSession.builder.appName(spark_config['app_name']).master(master)
     
     for key, value in spark_config.get('config', {}).items():
-        builder = builder.config(key, value)
+        builder = builder.config(key, str(value))
     
     spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel("WARN")

@@ -1,17 +1,73 @@
 version: '3.8'
 
 services:
+  spark-master:
+    image: apache/spark:3.5.0-python3
+    container_name: spark-master
+    hostname: spark-master
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+      - PYSPARK_PYTHON=/usr/bin/python3
+      - PYSPARK_DRIVER_PYTHON=/usr/bin/python3
+      - PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+      - "4040:4040"
+    volumes:
+      - ../data:/app/data
+    networks:
+      - spark-network
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+      --host spark-master --port 7077 --webui-port 8080
+
+  spark-worker:
+    image: apache/spark:3.5.0-python3
+    container_name: spark-worker
+    hostname: spark-worker
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=2g
+      - PYSPARK_PYTHON=/usr/bin/python3
+      - PYSPARK_DRIVER_PYTHON=/usr/bin/python3
+      - PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip
+    ports:
+      - "8081:8081"
+    volumes:
+      - ../data:/app/data
+    depends_on:
+      - spark-master
+    networks:
+      - spark-network
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker
+      spark://spark-master:7077 --webui-port 8081
+
   spark-app:
     build:
       context: ..
       dockerfile: docker/Dockerfile
     container_name: data_eng_app
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+      - PYTHONUNBUFFERED=1
+      - PYSPARK_PYTHON=/usr/bin/python3
+      - PYSPARK_DRIVER_PYTHON=/usr/bin/python3
+      - PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip
     volumes:
       - ../data:/app/data
       - ../src:/app/src
       - ../config:/app/config
-    environment:
-      - SPARK_HOME=/usr/local/lib/python3.11/site-packages/pyspark
-      - PYTHONUNBUFFERED=1
     working_dir: /app
-    command: python -m src.app
+    depends_on:
+      - spark-master
+      - spark-worker
+    networks:
+      - spark-network
+    command: tail -f /dev/null
+
+networks:
+  spark-network:
+    driver: bridge

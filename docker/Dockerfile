@@ -1,4 +1,4 @@
-FROM python:3.11-slim-bookworm
+FROM python:3.8-slim-bullseye
 
 WORKDIR /app
 
@@ -10,6 +10,8 @@ RUN apt-get update && apt-get install -y \
 
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+RUN ln -sf /usr/local/bin/python3 /usr/bin/python3 || true
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
