@@ -1,17 +1,4 @@
-.PHONY: help setup build up down run logs clean test spark-ui status
-
-help:
-	@echo "Available commands:"
-	@echo "  make setup     - Initial project setup"
-	@echo "  make build     - Build Docker containers"
-	@echo "  make up        - Start Spark cluster"
-	@echo "  make run       - Run the application"
-	@echo "  make logs      - View application logs"
-	@echo "  make spark-ui  - Open Spark Master UI"
-	@echo "  make status    - Check cluster status"
-	@echo "  make down      - Stop cluster"
-	@echo "  make clean     - Clean generated files"
-	@echo "  make test      - Run tests"
+.PHONY: help setup build up down run logs clean test spark-ui status fix-permissions
 
 setup:
 	@echo "Setting up project..."
@@ -26,6 +13,8 @@ up:
 	cd docker && docker-compose up -d
 	@echo "Waiting for cluster to initialize..."
 	@sleep 10
+	@echo "Fixing data directory permissions..."
+	@chmod -R 777 data || true
 	@echo "✓ Cluster ready!"
 	@echo "  Spark Master UI: http://localhost:8080"
 	@echo "  Spark Worker UI: http://localhost:8081"
@@ -54,6 +43,15 @@ clean:
 	rm -rf data/processed/*
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
+	@chmod -R 777 data || true
 
 test:
 	cd docker && docker-compose run --rm spark-app pytest tests/ -v
+
+fix-permissions:
+	@echo "Fixing data directory permissions..."
+	@chmod -R 777 data
+	@cd docker && docker-compose exec spark-master chmod -R 777 /app/data 2>/dev/null || true
+	@cd docker && docker-compose exec spark-worker chmod -R 777 /app/data 2>/dev/null || true
+	@cd docker && docker-compose exec spark-app chmod -R 777 /app/data 2>/dev/null || true
+	@echo "✓ Permissions fixed!"

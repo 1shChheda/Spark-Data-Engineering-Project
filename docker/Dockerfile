@@ -18,4 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+RUN mkdir -p /app/data/raw /app/data/processed && \
+    chmod -R 777 /app/data
+
+USER root
+
 CMD ["python", "-m", "src.app"]

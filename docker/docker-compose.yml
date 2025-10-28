@@ -5,6 +5,7 @@ services:
     image: apache/spark:3.5.0-python3
     container_name: spark-master
     hostname: spark-master
+    user: root
     environment:
       - SPARK_NO_DAEMONIZE=true
       - PYSPARK_PYTHON=/usr/bin/python3
@@ -19,13 +20,18 @@ services:
     networks:
       - spark-network
     command: >
+      bash -c "
+      mkdir -p /app/data/raw /app/data/processed &&
+      chmod -R 777 /app/data &&
       /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
       --host spark-master --port 7077 --webui-port 8080
+      "
 
   spark-worker:
     image: apache/spark:3.5.0-python3
     container_name: spark-worker
     hostname: spark-worker
+    user: root
     environment:
       - SPARK_NO_DAEMONIZE=true
       - SPARK_WORKER_CORES=2
@@ -42,14 +48,19 @@ services:
     networks:
       - spark-network
     command: >
+      bash -c "
+      mkdir -p /app/data/raw /app/data/processed &&
+      chmod -R 777 /app/data &&
       /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker
       spark://spark-master:7077 --webui-port 8081
+      "
 
   spark-app:
     build:
       context: ..
       dockerfile: docker/Dockerfile
     container_name: data_eng_app
+    user: root
     environment:
       - SPARK_MASTER=spark://spark-master:7077
       - PYTHONUNBUFFERED=1
@@ -66,7 +77,12 @@ services:
       - spark-worker
     networks:
       - spark-network
-    command: tail -f /dev/null
+    command: >
+      bash -c "
+      mkdir -p /app/data/raw /app/data/processed &&
+      chmod -R 777 /app/data &&
+      tail -f /dev/null
+      "
 
 networks:
   spark-network:

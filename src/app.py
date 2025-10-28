@@ -22,7 +22,7 @@ def main():
         print("\n=== DataFrame Created ===")
         df.show()
         
-        output_dir = "data/processed/output"
+        output_dir = "data/processed"
         os.makedirs(output_dir, exist_ok=True)
         
         df.coalesce(1).write.mode("overwrite").option("header", "true").csv(output_dir)

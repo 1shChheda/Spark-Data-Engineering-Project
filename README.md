@@ -21,6 +21,7 @@ make setup
 ```
 
 ### 2. Build Docker Images
+
 ```bash
 make build
 ```
@@ -40,18 +41,28 @@ make run
 
 This runs `python -m src.app` inside the `spark-app` container.
 
+If you encounter file permission errors (e.g., while writing output),
+you can reset permissions using:
+
+```bash
+make fix-permissions
+```
+
+This ensures all containers have full read/write access to the shared `data/` directory.
+
 ## Available Commands
 
-- `make setup` - **One-time setup** (install, env config)
-- `make build` - Build Docker containers
-- `make up` - Start the Spark cluster (Master + Worker + App)
-- `make run` - Run the Spark application
-- `make logs` - View application logs
-- `make spark-ui` - Open Spark Master UI in browser
-- `make status` - Check container status
-- `make down` - Stop containers
-- `make clean` - Clean cache and processed files
-- `make test` - Run tests
+* `make setup` - **One-time setup** (install, permissions, env config)
+* `make build` - Build Docker containers
+* `make up` - Start the Spark cluster (Master + Worker + App)
+* `make run` - Run the Spark application
+* `make fix-permissions` - Fix shared data directory permissions
+* `make logs` - View application logs
+* `make spark-ui` - Open Spark Master UI in browser
+* `make status` - Check container status
+* `make down` - Stop containers
+* `make clean` - Clean cache and processed files
+* `make test` - Run tests
 
 ## Project Structure
 ```
@@ -75,13 +86,18 @@ PYTHONPATH=/app
 
 ## Output
 
-The application creates a DataFrame and writes it to `data/processed/output.csv`
+The application creates a DataFrame and writes it to:
+```
+data/processed/output/
+```
+> All containers now run as **root** with shared `777` permissions on `/app/data`,
+> ensuring reliable read/write access during Spark job execution.
 
 ## Development Notes
 
 * The **`spark-app`** container uses **Python 3.8** (matching the Spark image) for compatibility.
 * `data/` and `src/` directories are **mounted as volumes**, allowing live code editing without rebuilding.
-* Spark UI available at [http://localhost:8080](http://localhost:8080)
+* Spark UI is available at [http://localhost:8080](http://localhost:8080)
 
 To modify your code:
 
@@ -92,5 +108,3 @@ vim src/app.py
 # Re-run the application
 make run
 ```
-
-The `data/` and `src/` directories are mounted as volumes for live development.
