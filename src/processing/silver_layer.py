@@ -1,9 +1,10 @@
-#Data Cleaning & Validation Layer
-##Transforms Bronze data into clean, validated Silver tables
-
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, trim, upper, when, lit, to_timestamp
+from pyspark.sql.functions import (
+    col, trim, upper, when, lit, to_timestamp,
+    year, month, dayofmonth, dayofweek, hour
+)
 import os
+
 
 class SilverLayer:
     def __init__(self, spark: SparkSession, base_path: str = "data"):
@@ -16,7 +17,6 @@ class SilverLayer:
         df = self.spark.read.format("delta") \
             .load(os.path.join(self.bronze_path, "transactions"))
 
-        # basic cleaning
         df_clean = df \
             .filter(col("Quantity").isNotNull()) \
             .filter(col("UnitPrice").isNotNull()) \
@@ -27,19 +27,35 @@ class SilverLayer:
                         when(col("Description").isNull(), "UNKNOWN")
                         .otherwise(trim(col("Description")))) \
             .withColumn("invoice_datetime", to_timestamp(col("InvoiceDate"), "M/d/yyyy H:mm"))
-        
+
+        # 🔹 derived columns
+        df_enriched = df_clean \
+            .withColumn("total_price", col("Quantity") * col("UnitPrice")) \
+            .withColumn("is_return", when(col("Quantity") < 0, lit(True)).otherwise(lit(False))) \
+            .withColumn("is_cancellation",
+                        when(col("InvoiceNo").startswith("C"), lit(True)).otherwise(lit(False))) \
+            .withColumn("year", year(col("invoice_datetime"))) \
+            .withColumn("month", month(col("invoice_datetime"))) \
+            .withColumn("day", dayofmonth(col("invoice_datetime"))) \
+            .withColumn("day_of_week", dayofweek(col("invoice_datetime"))) \
+            .withColumn("hour", hour(col("invoice_datetime")))
+
         silver_path = os.path.join(self.silver_path, "transactions_clean")
-        df_clean.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(silver_path)
-        return df_clean
+        df_enriched.write.format("delta") \
+            .mode("overwrite") \
+            .option("overwriteSchema", "true") \
+            .save(silver_path)
+
+        return df_enriched
+
 
 def main():
     from src.spark_session import create_spark_session
     spark = create_spark_session()
-    
-    silver = SilverLayer(spark)
-    silver.clean_transactions()
-    
+
+    SilverLayer(spark).clean_transactions()
     spark.stop()
+
 
 if __name__ == "__main__":
     main()
