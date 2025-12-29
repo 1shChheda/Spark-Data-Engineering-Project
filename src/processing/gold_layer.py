@@ -28,6 +28,10 @@ class GoldLayer:
         df_trans = self.spark.read.format("delta") \
             .load(os.path.join(self.silver_path, "transactions_clean"))
         
+        #added missing customers table read
+        df_customers = self.spark.read.format("delta") \
+            .load(os.path.join(self.silver_path, "customers"))
+        
         #filter valid transactions
         df_valid = df_trans.filter(
             (col("CustomerID").isNotNull()) & 
@@ -76,7 +80,9 @@ class GoldLayer:
             avg("Quantity").alias("avg_items_per_transaction")
         )
         
-        customer_360 = rfm_segmented \
+        #joins with existing df_customers
+        customer_360 = df_customers \
+            .join(rfm_segmented, "CustomerID", "left") \
             .join(behavior_metrics, "CustomerID", "left")
         
         #write to Gold
@@ -99,6 +105,10 @@ class GoldLayer:
         df_trans = self.spark.read.format("delta") \
             .load(os.path.join(self.silver_path, "transactions_clean"))
         
+        #added missing products table read
+        df_products = self.spark.read.format("delta") \
+            .load(os.path.join(self.silver_path, "products"))
+        
         #valid transactions only
         df_valid = df_trans.filter(
             (~col("is_return")) & 
@@ -107,19 +117,22 @@ class GoldLayer:
         
         #product performance metrics
         product_perf = df_valid.groupBy("StockCode").agg(
-            spark_sum("total_price").alias("total_revenue"),
-            spark_sum("Quantity").alias("total_quantity_sold"),
+            spark_sum("total_price").alias("total_revenue_gold"),
+            spark_sum("Quantity").alias("total_quantity_gold"),
             count(col("CustomerID").isNotNull()).alias("unique_buyers"),
             avg("total_price").alias("avg_transaction_value"),
             count("InvoiceNo").alias("purchase_frequency")
         )
         
+        product_gold = df_products \
+            .join(product_perf, "StockCode", "left")
+        
         #add performance categories
-        product_gold = product_perf.withColumn(
+        product_gold = product_gold.withColumn(
             "performance_category",
-            when(col("total_revenue") >= product_perf.approxQuantile("total_revenue", [0.8], 0.01)[0], "Star Products")
-            .when(col("total_revenue") >= product_perf.approxQuantile("total_revenue", [0.5], 0.01)[0], "Good Performers")
-            .when(col("total_revenue") >= product_perf.approxQuantile("total_revenue", [0.2], 0.01)[0], "Average")
+            when(col("total_revenue") >= product_gold.approxQuantile("total_revenue", [0.8], 0.01)[0], "Star Products")
+            .when(col("total_revenue") >= product_gold.approxQuantile("total_revenue", [0.5], 0.01)[0], "Good Performers")
+            .when(col("total_revenue") >= product_gold.approxQuantile("total_revenue", [0.2], 0.01)[0], "Average")
             .otherwise("Underperformers")
         )
         
