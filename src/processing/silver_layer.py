@@ -1,7 +1,10 @@
-from pyspark.sql import SparkSession
+#Data Cleaning & Validation Layer
+##Transforms Bronze data into clean, validated Silver tables
+
+from pyspark.sql import SparkSession, Window
 from pyspark.sql.functions import (
     col, trim, upper, when, lit, to_timestamp,
-    year, month, dayofmonth, dayofweek, hour
+    year, month, dayofmonth, dayofweek, hour, row_number
 )
 import os
 
@@ -28,7 +31,7 @@ class SilverLayer:
                         .otherwise(trim(col("Description")))) \
             .withColumn("invoice_datetime", to_timestamp(col("InvoiceDate"), "M/d/yyyy H:mm"))
 
-        # 🔹 derived columns
+        #derived columns
         df_enriched = df_clean \
             .withColumn("total_price", col("Quantity") * col("UnitPrice")) \
             .withColumn("is_return", when(col("Quantity") < 0, lit(True)).otherwise(lit(False))) \
@@ -40,13 +43,22 @@ class SilverLayer:
             .withColumn("day_of_week", dayofweek(col("invoice_datetime"))) \
             .withColumn("hour", hour(col("invoice_datetime")))
 
+        #deduplication
+        window = Window.partitionBy("record_hash") \
+                       .orderBy(col("ingestion_timestamp").desc())
+
+        df_deduped = df_enriched \
+            .withColumn("row_num", row_number().over(window)) \
+            .filter(col("row_num") == 1) \
+            .drop("row_num")
+
         silver_path = os.path.join(self.silver_path, "transactions_clean")
-        df_enriched.write.format("delta") \
+        df_deduped.write.format("delta") \
             .mode("overwrite") \
             .option("overwriteSchema", "true") \
             .save(silver_path)
 
-        return df_enriched
+        return df_deduped
 
 
 def main():
