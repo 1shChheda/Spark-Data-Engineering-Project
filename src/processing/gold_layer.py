@@ -80,10 +80,24 @@ class GoldLayer:
             avg("Quantity").alias("avg_items_per_transaction")
         )
         
-        #joins with existing df_customers
+        #added product diversity metrics
+        product_diversity = df_valid.groupBy("CustomerID").agg(
+            count(col("StockCode")).alias("unique_products"),
+            count(col("Description")).alias("unique_categories")
+        )
+        
+        #added temporal patterns
+        temporal = df_valid.groupBy("CustomerID").agg(
+            avg(when(col("is_weekend"), 1).otherwise(0)).alias("weekend_purchase_ratio"),
+            avg("hour").alias("avg_purchase_hour")
+        )
+        
+        #join all metrics
         customer_360 = df_customers \
             .join(rfm_segmented, "CustomerID", "left") \
-            .join(behavior_metrics, "CustomerID", "left")
+            .join(behavior_metrics, "CustomerID", "left") \
+            .join(product_diversity, "CustomerID", "left") \
+            .join(temporal, "CustomerID", "left")
         
         #write to Gold
         gold_path = os.path.join(self.gold_path, "customer_360")
@@ -124,8 +138,12 @@ class GoldLayer:
             count("InvoiceNo").alias("purchase_frequency")
         )
         
+        #drop duplicate columns from df_products before join
         product_gold = df_products \
-            .join(product_perf, "StockCode", "left")
+            .drop("total_revenue", "total_quantity_sold") \
+            .join(product_perf, "StockCode", "left") \
+            .withColumnRenamed("total_revenue_gold", "total_revenue") \
+            .withColumnRenamed("total_quantity_gold", "total_quantity_sold")
         
         #add performance categories
         product_gold = product_gold.withColumn(
@@ -145,6 +163,13 @@ class GoldLayer:
             .save(gold_path)
         
         print(f"✓ Created product metrics for {product_gold.count():,} products")
+        
+        #show top products
+        print("\n Top 10 Products by Revenue:")
+        product_gold.select(
+            "StockCode", "Description", "total_revenue", 
+            "total_quantity_sold", "unique_buyers", "performance_category"
+        ).orderBy(col("total_revenue").desc()).show(10, truncate=False)
         
         return product_gold
 
