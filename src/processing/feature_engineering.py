@@ -34,6 +34,8 @@ class FeatureEngineering:
         df_customer_360 = self.spark.read.format("delta") \
             .load(os.path.join(self.gold_path, "customer_360"))
         
+        #print(f"Customer 360 columns: {df_customer_360.columns}")
+        
         #filter valid transactions
         df_valid = df_trans.filter(
             (col("CustomerID").isNotNull()) & 
@@ -41,24 +43,31 @@ class FeatureEngineering:
             (~col("is_cancellation"))
         )
         
+        #01: Behavioral Features (avoid duplicates with customer_360)
         behavior_features = df_valid.groupBy("CustomerID").agg(
+            #purchase patterns
             count("InvoiceNo").alias("purchase_frequency_fe"),
             avg("total_price").alias("avg_transaction_value_fe"),
             stddev("total_price").alias("std_transaction_value"),
             spark_max("total_price").alias("max_transaction_value_fe"),
             spark_min("total_price").alias("min_transaction_value_fe"),
             
+            #quantity patterns
             avg("Quantity").alias("avg_items_per_order_fe"),
             spark_max("Quantity").alias("max_items_per_order"),
             
+            #product diversity
             count(col("StockCode")).alias("total_products_purchased"),
             size(collect_list(col("StockCode"))).alias("unique_products_fe"),
             
+            #time patterns
             avg(when(col("is_weekend"), 1).otherwise(0)).alias("weekend_purchase_ratio_fe"),
             avg("hour").alias("avg_purchase_hour_fe"),
             stddev("hour").alias("std_purchase_hour")
         )
         
+        #02: Temporal Features (avoid duplicates)
+        #sort by date for sequential features
         window_customer = Window.partitionBy("CustomerID").orderBy("invoice_datetime")
         
         df_temporal = df_valid \
@@ -73,17 +82,19 @@ class FeatureEngineering:
             spark_max("days_since_prev_purchase").alias("max_days_between_purchases")
         )
         
+        #03: Spending Patterns (avoid duplicates)
         spending_features = df_valid.groupBy("CustomerID").agg(
             spark_sum("total_price").alias("total_lifetime_value_fe"),
             (spark_sum("total_price") / count("InvoiceNo")).alias("avg_basket_value_fe"),
             
+            #spending velocity (recent vs historical)
             spark_sum(when(datediff(current_date(), col("invoice_datetime")) <= 30, col("total_price"))
                      .otherwise(0)).alias("spending_last_30_days"),
             spark_sum(when(datediff(current_date(), col("invoice_datetime")) <= 90, col("total_price"))
                      .otherwise(0)).alias("spending_last_90_days"),
         )
         
-        #properly handle division by zero
+        #calculate spending trend
         spending_features = spending_features.withColumn(
             "spending_trend_30_vs_90",
             when(col("spending_last_90_days") > 0,
@@ -91,18 +102,20 @@ class FeatureEngineering:
             .otherwise(0)
         )
         
+        #04: Product Affinity Features
         product_affinity = df_valid.groupBy("CustomerID").agg(
             count(col("StockCode")).alias("product_variety"),
             size(array_distinct(collect_list("StockCode"))).alias("unique_stock_codes")
         )
         
+        #05: Engagement Features
         engagement = df_valid.groupBy("CustomerID").agg(
             count("InvoiceNo").alias("total_invoices_fe"),
             datediff(current_date(), spark_max("invoice_datetime")).alias("recency_days_fe"),
             datediff(spark_max("invoice_datetime"), spark_min("invoice_datetime")).alias("customer_age_days_fe")
         )
         
-        #handle division by zero in engagement score
+        #calculate engagement score
         engagement = engagement.withColumn(
             "engagement_score_fe",
             when(col("customer_age_days_fe") > 0,
@@ -111,6 +124,7 @@ class FeatureEngineering:
         )
         
         #Join all features
+        #start with customer_360 as base (it has all the Gold layer metrics)
         customer_features = df_customer_360 \
             .join(behavior_features, "CustomerID", "left") \
             .join(temporal_features, "CustomerID", "left") \
@@ -118,7 +132,7 @@ class FeatureEngineering:
             .join(product_affinity, "CustomerID", "left") \
             .join(engagement, "CustomerID", "left")
         
-        #add derived features with proper null handling
+        #add derived features
         customer_features = customer_features \
             .withColumn("clv_to_frequency_ratio",
                        when(col("frequency") > 0, col("monetary") / col("frequency"))
@@ -153,6 +167,7 @@ class FeatureEngineering:
         print(f"✓ Total features: {len(customer_features.columns)}")
         print(f"✓ Written to {feature_path}")
         
+        #show sample
         print("\n Sample Features:")
         customer_features.select(
             "CustomerID", "recency_days", "frequency", "monetary",
@@ -181,6 +196,7 @@ class FeatureEngineering:
             (~col("is_cancellation"))
         )
         
+        #popularity features (rename to avoid conflicts)
         popularity = df_valid.groupBy("StockCode").agg(
             count("InvoiceNo").alias("purchase_count_fe"),
             count(col("CustomerID").isNotNull()).alias("unique_buyers_fe"),
@@ -189,13 +205,15 @@ class FeatureEngineering:
             stddev("UnitPrice").alias("price_volatility")
         )
         
+        #Co-purchase patterns (items bought together)
         copurchase = df_valid.groupBy("InvoiceNo").agg(
             collect_list("StockCode").alias("products_in_basket")
         )
         
+        #join with product catalog
         product_features = df_products.join(popularity, "StockCode", "left")
         
-        #add proper null handling in derived features
+        #add derived features
         product_features = product_features \
             .withColumn("popularity_score",
                        when(col("unique_buyers") > 0,
@@ -214,8 +232,10 @@ class FeatureEngineering:
                             col("unique_buyers") / col("purchase_frequency"))
                        .otherwise(0))
         
+        #fill nulls
         product_features = product_features.fillna(0)
         
+        #write to feature store
         feature_path = os.path.join(self.feature_path, "product_features")
         product_features.write \
             .format("delta") \
@@ -226,6 +246,7 @@ class FeatureEngineering:
         print(f"✓ Created {product_features.count():,} product feature records")
         print(f"✓ Written to {feature_path}")
         
+        #show sample
         print("\n Sample Product Features:")
         product_features.select(
             "StockCode", "Description", "total_revenue", 
@@ -243,6 +264,7 @@ class FeatureEngineering:
         df_trans = self.spark.read.format("delta") \
             .load(os.path.join(self.silver_path, "transactions_clean"))
         
+        #customer statistics for anomaly detection
         customer_stats = df_trans.groupBy("CustomerID").agg(
             avg("total_price").alias("customer_avg_price"),
             stddev("total_price").alias("customer_std_price"),
@@ -250,9 +272,10 @@ class FeatureEngineering:
             stddev("Quantity").alias("customer_std_quantity")
         )
         
+        #join back to transactions
         trans_features = df_trans.join(customer_stats, "CustomerID", "left")
         
-        #add proper null handling for z-scores
+        #calculate z-scores for anomaly detection
         trans_features = trans_features \
             .withColumn("price_zscore",
                        when(col("customer_std_price") > 0,
@@ -263,12 +286,14 @@ class FeatureEngineering:
                             (col("Quantity") - col("customer_avg_quantity")) / col("customer_std_quantity"))
                        .otherwise(0))
         
+        #time-based features
         trans_features = trans_features \
             .withColumn("is_business_hours", 
                        when((col("hour") >= 9) & (col("hour") <= 17), 1).otherwise(0)) \
             .withColumn("is_night_purchase",
                        when((col("hour") >= 22) | (col("hour") <= 6), 1).otherwise(0))
         
+        #write to feature store
         feature_path = os.path.join(self.feature_path, "transaction_features")
         trans_features.write \
             .format("delta") \
@@ -284,6 +309,7 @@ class FeatureEngineering:
 
 
 def main():
+    #Test feature engineering
     from src.spark_session import create_spark_session
     
     spark = create_spark_session()
@@ -291,6 +317,7 @@ def main():
     try:
         fe = FeatureEngineering(spark)
         
+        #creating all feature sets
         fe.create_customer_features()
         fe.create_product_features()
         fe.create_transaction_features()
