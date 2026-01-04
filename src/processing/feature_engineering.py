@@ -42,20 +42,20 @@ class FeatureEngineering:
         )
         
         behavior_features = df_valid.groupBy("CustomerID").agg(
-            count("InvoiceNo").alias("purchase_frequency"),
-            avg("total_price").alias("avg_transaction_value"),
+            count("InvoiceNo").alias("purchase_frequency_fe"),
+            avg("total_price").alias("avg_transaction_value_fe"),
             stddev("total_price").alias("std_transaction_value"),
-            spark_max("total_price").alias("max_transaction_value"),
-            spark_min("total_price").alias("min_transaction_value"),
+            spark_max("total_price").alias("max_transaction_value_fe"),
+            spark_min("total_price").alias("min_transaction_value_fe"),
             
-            avg("Quantity").alias("avg_items_per_order"),
+            avg("Quantity").alias("avg_items_per_order_fe"),
             spark_max("Quantity").alias("max_items_per_order"),
             
             count(col("StockCode")).alias("total_products_purchased"),
-            size(collect_list(col("StockCode"))).alias("unique_products"),
+            size(collect_list(col("StockCode"))).alias("unique_products_fe"),
             
-            avg(when(col("is_weekend"), 1).otherwise(0)).alias("weekend_purchase_ratio"),
-            avg("hour").alias("avg_purchase_hour"),
+            avg(when(col("is_weekend"), 1).otherwise(0)).alias("weekend_purchase_ratio_fe"),
+            avg("hour").alias("avg_purchase_hour_fe"),
             stddev("hour").alias("std_purchase_hour")
         )
         
@@ -67,15 +67,15 @@ class FeatureEngineering:
                        datediff(col("invoice_datetime"), col("prev_purchase_date")))
         
         temporal_features = df_temporal.groupBy("CustomerID").agg(
-            avg("days_since_prev_purchase").alias("avg_days_between_purchases"),
+            avg("days_since_prev_purchase").alias("avg_days_between_purchases_fe"),
             stddev("days_since_prev_purchase").alias("std_days_between_purchases"),
             spark_min("days_since_prev_purchase").alias("min_days_between_purchases"),
             spark_max("days_since_prev_purchase").alias("max_days_between_purchases")
         )
         
         spending_features = df_valid.groupBy("CustomerID").agg(
-            spark_sum("total_price").alias("total_lifetime_value"),
-            (spark_sum("total_price") / count("InvoiceNo")).alias("avg_basket_value"),
+            spark_sum("total_price").alias("total_lifetime_value_fe"),
+            (spark_sum("total_price") / count("InvoiceNo")).alias("avg_basket_value_fe"),
             
             spark_sum(when(datediff(current_date(), col("invoice_datetime")) <= 30, col("total_price"))
                      .otherwise(0)).alias("spending_last_30_days"),
@@ -83,9 +83,12 @@ class FeatureEngineering:
                      .otherwise(0)).alias("spending_last_90_days"),
         )
         
+        #properly handle division by zero
         spending_features = spending_features.withColumn(
             "spending_trend_30_vs_90",
-            col("spending_last_30_days") / col("spending_last_90_days")
+            when(col("spending_last_90_days") > 0,
+                 col("spending_last_30_days") / col("spending_last_90_days"))
+            .otherwise(0)
         )
         
         product_affinity = df_valid.groupBy("CustomerID").agg(
@@ -94,14 +97,17 @@ class FeatureEngineering:
         )
         
         engagement = df_valid.groupBy("CustomerID").agg(
-            count("InvoiceNo").alias("total_invoices"),
-            datediff(current_date(), spark_max("invoice_datetime")).alias("recency_days"),
-            datediff(spark_max("invoice_datetime"), spark_min("invoice_datetime")).alias("customer_age_days")
+            count("InvoiceNo").alias("total_invoices_fe"),
+            datediff(current_date(), spark_max("invoice_datetime")).alias("recency_days_fe"),
+            datediff(spark_max("invoice_datetime"), spark_min("invoice_datetime")).alias("customer_age_days_fe")
         )
         
+        #handle division by zero in engagement score
         engagement = engagement.withColumn(
-            "engagement_score",
-            col("total_invoices") / (col("customer_age_days") / 30)
+            "engagement_score_fe",
+            when(col("customer_age_days_fe") > 0,
+                 col("total_invoices_fe") / (col("customer_age_days_fe") / 30))
+            .otherwise(0)
         )
         
         #Join all features
@@ -112,18 +118,28 @@ class FeatureEngineering:
             .join(product_affinity, "CustomerID", "left") \
             .join(engagement, "CustomerID", "left")
         
-        #add derived features
+        #add derived features with proper null handling
         customer_features = customer_features \
             .withColumn("clv_to_frequency_ratio",
-                       col("monetary") / col("frequency")) \
+                       when(col("frequency") > 0, col("monetary") / col("frequency"))
+                       .otherwise(0)) \
             .withColumn("recency_to_age_ratio",
-                       col("recency_days") / col("customer_age_days")) \
+                       when(col("customer_age_days_fe") > 0, 
+                            col("recency_days") / col("customer_age_days_fe"))
+                       .otherwise(0)) \
             .withColumn("log_monetary", log(col("monetary") + 1)) \
             .withColumn("sqrt_frequency", sqrt(col("frequency"))) \
             .withColumn("purchase_regularity",
-                       col("avg_days_between_purchases") / col("std_days_between_purchases")) \
+                       when(col("std_days_between_purchases") > 0,
+                            col("avg_days_between_purchases_fe") / col("std_days_between_purchases"))
+                       .otherwise(0)) \
             .withColumn("spending_consistency",
-                       col("std_transaction_value") / col("avg_transaction_value"))
+                       when(col("avg_transaction_value_fe") > 0,
+                            col("std_transaction_value") / col("avg_transaction_value_fe"))
+                       .otherwise(0))
+        
+        #fill nulls
+        customer_features = customer_features.fillna(0)
         
         #write to feature store
         feature_path = os.path.join(self.feature_path, "customer_features")
@@ -140,7 +156,7 @@ class FeatureEngineering:
         print("\n Sample Features:")
         customer_features.select(
             "CustomerID", "recency_days", "frequency", "monetary",
-            "avg_transaction_value", "unique_products", "engagement_score",
+            "avg_transaction_value", "unique_products", "engagement_score_fe",
             "customer_segment", "value_tier"
         ).show(5, truncate=False)
         
@@ -158,16 +174,18 @@ class FeatureEngineering:
         df_products = self.spark.read.format("delta") \
             .load(os.path.join(self.gold_path, "product_metrics"))
         
+        #print(f"Product metrics columns: {df_products.columns}")
+        
         df_valid = df_trans.filter(
             (~col("is_return")) & 
             (~col("is_cancellation"))
         )
         
         popularity = df_valid.groupBy("StockCode").agg(
-            count("InvoiceNo").alias("purchase_count"),
-            count(col("CustomerID").isNotNull()).alias("unique_buyers"),
-            spark_sum("Quantity").alias("total_quantity_sold"),
-            avg("UnitPrice").alias("avg_price"),
+            count("InvoiceNo").alias("purchase_count_fe"),
+            count(col("CustomerID").isNotNull()).alias("unique_buyers_fe"),
+            spark_sum("Quantity").alias("total_quantity_sold_fe"),
+            avg("UnitPrice").alias("avg_price_fe"),
             stddev("UnitPrice").alias("price_volatility")
         )
         
@@ -177,17 +195,24 @@ class FeatureEngineering:
         
         product_features = df_products.join(popularity, "StockCode", "left")
         
+        #add proper null handling in derived features
         product_features = product_features \
             .withColumn("popularity_score",
-                       log(col("unique_buyers") + 1)) \
+                       when(col("unique_buyers") > 0,
+                            log(col("unique_buyers") + 1))
+                       .otherwise(0)) \
             .withColumn("price_tier",
                        when(col("avg_transaction_value") >= 10, "Premium")
                        .when(col("avg_transaction_value") >= 5, "Mid-Range")
                        .otherwise("Budget")) \
             .withColumn("velocity_score",
-                       col("total_revenue") / col("purchase_frequency")) \
+                       when(col("purchase_frequency") > 0,
+                            col("total_revenue") / col("purchase_frequency"))
+                       .otherwise(0)) \
             .withColumn("customer_concentration",
-                       col("unique_buyers") / col("purchase_frequency"))
+                       when(col("purchase_frequency") > 0,
+                            col("unique_buyers") / col("purchase_frequency"))
+                       .otherwise(0))
         
         product_features = product_features.fillna(0)
         
@@ -227,11 +252,16 @@ class FeatureEngineering:
         
         trans_features = df_trans.join(customer_stats, "CustomerID", "left")
         
+        #add proper null handling for z-scores
         trans_features = trans_features \
             .withColumn("price_zscore",
-                       (col("total_price") - col("customer_avg_price")) / col("customer_std_price")) \
+                       when(col("customer_std_price") > 0,
+                            (col("total_price") - col("customer_avg_price")) / col("customer_std_price"))
+                       .otherwise(0)) \
             .withColumn("quantity_zscore",
-                       (col("Quantity") - col("customer_avg_quantity")) / col("customer_std_quantity"))
+                       when(col("customer_std_quantity") > 0,
+                            (col("Quantity") - col("customer_avg_quantity")) / col("customer_std_quantity"))
+                       .otherwise(0))
         
         trans_features = trans_features \
             .withColumn("is_business_hours", 
