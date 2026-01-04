@@ -12,6 +12,7 @@ import os
 
 
 class GoldLayer:
+    #Handles business-level aggregations for Gold layer
     
     def __init__(self, spark: SparkSession, base_path: str = "data"):
         self.spark = spark
@@ -20,6 +21,7 @@ class GoldLayer:
         self.gold_path = os.path.join(base_path, "gold")
         
     def create_customer_360(self):
+        #create comprehensive customer 360 view
         print("\n" + "="*60)
         print("GOLD LAYER: Creating Customer 360 View")
         print("="*60)
@@ -28,7 +30,6 @@ class GoldLayer:
         df_trans = self.spark.read.format("delta") \
             .load(os.path.join(self.silver_path, "transactions_clean"))
         
-        #added missing customers table read
         df_customers = self.spark.read.format("delta") \
             .load(os.path.join(self.silver_path, "customers"))
         
@@ -51,6 +52,7 @@ class GoldLayer:
             spark_sum("total_price").alias("monetary")
         )
         
+        #calculate RFM scores (1-5 scale)
         window_spec = Window.orderBy(col("recency_days"))
         rfm_scored = rfm \
             .withColumn("r_score", 6 - ntile(5).over(window_spec)) \
@@ -80,7 +82,7 @@ class GoldLayer:
             avg("Quantity").alias("avg_items_per_transaction")
         )
         
-        #product diversity metrics
+        #product diversity
         product_diversity = df_valid.groupBy("CustomerID").agg(
             count(col("StockCode")).alias("unique_products"),
             count(col("Description")).alias("unique_categories")
@@ -99,6 +101,14 @@ class GoldLayer:
             .join(product_diversity, "CustomerID", "left") \
             .join(temporal, "CustomerID", "left")
         
+        #add value tiers
+        customer_360 = customer_360.withColumn(
+            "value_tier",
+            when(col("monetary") >= customer_360.approxQuantile("monetary", [0.75], 0.01)[0], "High Value")
+            .when(col("monetary") >= customer_360.approxQuantile("monetary", [0.25], 0.01)[0], "Medium Value")
+            .otherwise("Low Value")
+        )
+        
         #write to Gold
         gold_path = os.path.join(self.gold_path, "customer_360")
         customer_360.write \
@@ -109,9 +119,18 @@ class GoldLayer:
         
         print(f"✓ Created Customer 360 with {customer_360.count():,} customers")
         
+        #show segment distribution
+        print("\n Customer Segment Distribution:")
+        customer_360.groupBy("customer_segment").agg(
+            count("*").alias("count"),
+            spark_round(avg("monetary"), 2).alias("avg_revenue"),
+            spark_round(avg("frequency"), 2).alias("avg_frequency")
+        ).orderBy(col("count").desc()).show(truncate=False)
+        
         return customer_360
     
     def create_product_metrics(self):
+        #create comprehensive product analytics
         print("\n" + "="*60)
         print("GOLD LAYER: Creating Product Metrics")
         print("="*60)
@@ -137,10 +156,20 @@ class GoldLayer:
             count("InvoiceNo").alias("purchase_frequency")
         )
         
-        #drop duplicate columns from df_products before join
+        #return rate
+        returns = df_trans.filter(col("is_return")).groupBy("StockCode").agg(
+            count("*").alias("return_count")
+        )
+        
+        product_with_returns = product_perf.join(returns, "StockCode", "left") \
+            .fillna(0, ["return_count"]) \
+            .withColumn("return_rate", 
+                    col("return_count") / (col("purchase_frequency") + col("return_count")))
+        
+        #join with catalog - DROP duplicate columns from df_products
         product_gold = df_products \
             .drop("total_revenue", "total_quantity_sold") \
-            .join(product_perf, "StockCode", "left") \
+            .join(product_with_returns, "StockCode", "left") \
             .withColumnRenamed("total_revenue_gold", "total_revenue") \
             .withColumnRenamed("total_quantity_gold", "total_quantity_sold")
         
@@ -173,6 +202,7 @@ class GoldLayer:
         return product_gold
 
     def create_daily_aggregates(self):
+        #create daily business metrics
         print("\n" + "="*60)
         print("GOLD LAYER: Creating Daily Aggregates")
         print("="*60)
@@ -219,6 +249,7 @@ class GoldLayer:
         daily_agg.write \
             .format("delta") \
             .mode("overwrite") \
+            .option("overwriteSchema", "true") \
             .partitionBy("year", "month") \
             .save(gold_path)
         
@@ -280,6 +311,7 @@ class GoldLayer:
 
 
 def main():
+    #Test Gold layer transformations
     from src.spark_session import create_spark_session
     
     spark = create_spark_session()
