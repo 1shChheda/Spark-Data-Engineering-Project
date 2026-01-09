@@ -103,7 +103,6 @@ class CustomerSegmentation:
             
             print(f"    Cost: {cost:.2f}")
         
-        #unpersist to free memory
         df_scaled.unpersist()
         
         #find elbow point (simple heuristic)
@@ -158,7 +157,7 @@ class CustomerSegmentation:
         #predict clusters
         df_clustered = model.transform(df)
         
-        #calculate cluster statistics for naming
+        # calculate cluster statistics for naming
         cluster_stats = df_clustered.groupBy("cluster_id").agg(
             {"recency_days": "avg", "frequency": "avg", "monetary": "avg"}
         ).collect()
@@ -186,12 +185,14 @@ class CustomerSegmentation:
                 segment_mapping[cluster_id] = "Needs Attention"
         
         #apply mapping
+        max_cluster = max(segment_mapping.keys()) if segment_mapping else 0
         mapping_expr = when(col("cluster_id") == 0, segment_mapping.get(0, "Other"))
-        for cluster_id in range(1, len(segment_mapping)):
+        for cluster_id in range(1, max_cluster + 1):
             mapping_expr = mapping_expr.when(
                 col("cluster_id") == cluster_id, 
                 segment_mapping.get(cluster_id, "Other")
             )
+        mapping_expr = mapping_expr.otherwise("Other")
         
         df_segmented = df_clustered.withColumn("segment_name", mapping_expr)
         
@@ -219,15 +220,54 @@ class CustomerSegmentation:
         return segment_profiles
     
     def save_model(self, model, model_metadata):
-        # TODO: save model and metadata
-        pass
-    
+        #save trained model and metadata
+        print(f"\nSaving model to {self.model_path}...")
+        
+        os.makedirs(self.model_path, exist_ok=True)
+        
+        #save spark model
+        model_file = os.path.join(self.model_path, "kmeans_pipeline")
+        model.write().overwrite().save(model_file)
+        
+        #save metadata
+        import json
+        metadata_file = os.path.join(self.model_path, "metadata.json")
+        model_metadata["training_date"] = str(self.spark.sql("SELECT current_timestamp()").collect()[0][0]) 
+        with open(metadata_file, 'w') as f:
+            json.dump(model_metadata, f, indent=2)
+        
+        print(f"✓ Model saved successfully")
+        
     def save_segments(self, df_segmented):
-        # TODO: save segmented customers
-        pass
-    
+        #save segmented customers to Gold layer
+        print("\nSaving segments to Gold layer...")
+        
+        #select relevant columns
+        df_output = df_segmented.select(
+            "CustomerID",
+            "cluster_id",
+            "segment_name",
+            "recency_days",
+            "frequency",
+            "monetary",
+            "customer_segment",  # from RFM
+            "avg_transaction_value",
+            "unique_products",
+            "engagement_score_fe"  # use _fe version
+        )
+        
+        #write to Gold
+        output_path = os.path.join(self.gold_path, "customer_segments")
+        df_output.write \
+            .format("delta") \
+            .mode("overwrite") \
+            .option("overwriteSchema", "true") \
+            .save(output_path)
+        
+        print(f"✓ Segments saved to {output_path}")
+        
     def run_segmentation(self, n_clusters=5):
-        #segmentation workflow (partial)
+        #complete segmentation workflow
         print("\n" + "="*60)
         print("CUSTOMER SEGMENTATION PIPELINE")
         print("="*60)
@@ -240,7 +280,6 @@ class CustomerSegmentation:
         
         #find optimal k
         optimal_k, costs = self.find_optimal_k(df_prepared, feature_cols)
-        #fix: use optimal_k
         n_clusters = optimal_k
         
         #train model
@@ -256,8 +295,19 @@ class CustomerSegmentation:
         #generate profiles
         segment_profiles = self.generate_segment_profiles(df_segmented)
         
-        # TODO: saves...
-        print("\n✓ Partial pipeline executed!")
+        #save everything
+        model_metadata = {
+            "n_clusters": n_clusters,
+            "features": feature_cols,
+            "training_date": None  # placeholder
+        }
+        
+        self.save_model(model, model_metadata)
+        self.save_segments(df_segmented)
+        
+        print("\n✓ Customer segmentation completed successfully!")
+        
+        return df_segmented, segment_profiles
 
 
 def main():
