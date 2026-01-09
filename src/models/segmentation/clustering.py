@@ -1,22 +1,30 @@
+#customer segmentation: RFM Analysis + K-Means Clustering
+##Identifies customer segments for targeted marketing
+
 from pyspark.sql import SparkSession
 from pyspark.ml.feature import VectorAssembler, StandardScaler
 from pyspark.ml.clustering import KMeans
 from pyspark.ml import Pipeline
-from pyspark.sql.functions import col, when
+from pyspark.sql.functions import col, when, concat_ws, udf
+from pyspark.sql.types import StringType
 import os
+import joblib
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 
 class CustomerSegmentation:
-
+    #Customer segmentation using RFM + K-Means
+    
     def __init__(self, spark: SparkSession, base_path: str = "data"):
         self.spark = spark
         self.base_path = base_path
         self.feature_path = os.path.join(base_path, "feature_store")
         self.model_path = os.path.join(base_path, "models", "segmentation")
         self.gold_path = os.path.join(base_path, "gold")
-    
+        
     def load_features(self):
-        # load customer features
+        #load customer features
         print("Loading customer features...")
         
         df = self.spark.read.format("delta") \
@@ -26,30 +34,30 @@ class CustomerSegmentation:
         return df
     
     def prepare_features(self, df, feature_cols=None):
-        # prepare features for clustering
+        #prepare features for clustering
         print("\nPreparing features for clustering...")
         
         if feature_cols is None:
-            # select key features for segmentation
+            #select key features for segmentation
             feature_cols = [
-                "recency_days",
-                "frequency",
-                "monetary",
-                "avg_transaction_value",
-                "unique_products",
-                "customer_age_days_fe",
-                "engagement_score_fe",
-                "spending_last_30_days",
-                "spending_last_90_days"
+                "recency_days",           # from customer_360
+                "frequency",              # from customer_360
+                "monetary",               # from customer_360
+                "avg_transaction_value",  # from customer_360
+                "unique_products",        # from customer_360
+                "customer_age_days_fe",   # use _fe version
+                "engagement_score_fe",    # use _fe version
+                "spending_last_30_days",  # from feature engineering
+                "spending_last_90_days"   # from feature engineering
             ]
         
-        # filter out customers with insufficient data
+        #filter out customers with insufficient data
         df_filtered = df.filter(
             (col("frequency") > 0) & 
             (col("monetary") > 0)
         )
         
-        #fill nulls
+        #handle nulls and infinities
         for col_name in feature_cols:
             df_filtered = df_filtered.fillna(0, [col_name])
         
@@ -86,6 +94,8 @@ class CustomerSegmentation:
         
         #try different k values
         costs = []
+        silhouettes = []
+        
         for k in range(k_range[0], k_range[1]):
             print(f"  Testing k={k}...")
             
@@ -106,7 +116,8 @@ class CustomerSegmentation:
         df_scaled.unpersist()
         
         #find elbow point (simple heuristic)
-        optimal_k = 5  # Default
+        #In PROD, we'd use more sophisticated methods
+        optimal_k = 5  #Default
         
         print(f"\n✓ Recommended k={optimal_k} (we can adjust based on business needs)")
         
@@ -157,12 +168,15 @@ class CustomerSegmentation:
         #predict clusters
         df_clustered = model.transform(df)
         
-        # calculate cluster statistics for naming
+        #calculate cluster statistics for naming
         cluster_stats = df_clustered.groupBy("cluster_id").agg(
             {"recency_days": "avg", "frequency": "avg", "monetary": "avg"}
         ).collect()
         
         #create mapping based on RFM characteristics
+        #Low recency + High frequency + High monetary = Champions
+        #High recency + Low frequency = At Risk/Hibernating
+        
         segment_mapping = {}
         for row in cluster_stats:
             cluster_id = row["cluster_id"]
@@ -185,14 +199,12 @@ class CustomerSegmentation:
                 segment_mapping[cluster_id] = "Needs Attention"
         
         #apply mapping
-        max_cluster = max(segment_mapping.keys()) if segment_mapping else 0
         mapping_expr = when(col("cluster_id") == 0, segment_mapping.get(0, "Other"))
-        for cluster_id in range(1, max_cluster + 1):
+        for cluster_id in range(1, len(segment_mapping)):
             mapping_expr = mapping_expr.when(
                 col("cluster_id") == cluster_id, 
                 segment_mapping.get(cluster_id, "Other")
             )
-        mapping_expr = mapping_expr.otherwise("Other")
         
         df_segmented = df_clustered.withColumn("segment_name", mapping_expr)
         
@@ -211,7 +223,7 @@ class CustomerSegmentation:
              "monetary": "avg",
              "avg_transaction_value": "avg",
              "unique_products": "avg",
-             "engagement_score_fe": "avg"}  # use _fe version
+             "engagement_score_fe": "avg"}  #use _fe version
         ).orderBy(col("count(CustomerID)").desc())
         
         print("\n Segment Profiles:")
@@ -232,7 +244,6 @@ class CustomerSegmentation:
         #save metadata
         import json
         metadata_file = os.path.join(self.model_path, "metadata.json")
-        model_metadata["training_date"] = str(self.spark.sql("SELECT current_timestamp()").collect()[0][0]) 
         with open(metadata_file, 'w') as f:
             json.dump(model_metadata, f, indent=2)
         
@@ -250,10 +261,10 @@ class CustomerSegmentation:
             "recency_days",
             "frequency",
             "monetary",
-            "customer_segment",  # from RFM
+            "customer_segment",  #from RFM
             "avg_transaction_value",
             "unique_products",
-            "engagement_score_fe"  # use _fe version
+            "engagement_score_fe"  #use _fe version
         )
         
         #write to Gold
@@ -278,7 +289,7 @@ class CustomerSegmentation:
         #prepare features
         df_prepared, feature_cols = self.prepare_features(df)
         
-        #find optimal k
+        #Find optimal k (we can skip if we know n_clusters)
         optimal_k, costs = self.find_optimal_k(df_prepared, feature_cols)
         n_clusters = optimal_k
         
@@ -299,7 +310,7 @@ class CustomerSegmentation:
         model_metadata = {
             "n_clusters": n_clusters,
             "features": feature_cols,
-            "training_date": None  # placeholder
+            "training_date": str(self.spark.sql("SELECT current_timestamp()").collect()[0][0])
         }
         
         self.save_model(model, model_metadata)
@@ -311,8 +322,24 @@ class CustomerSegmentation:
 
 
 def main():
-    # TODO: test customer segmentation
-    pass
+    #Test customer segmentation
+    from src.spark_session import create_spark_session
+    
+    spark = create_spark_session()
+    
+    try:
+        segmentation = CustomerSegmentation(spark)
+        df_segmented, profiles = segmentation.run_segmentation(n_clusters=5)
+        
+        print("\n✓ Segmentation pipeline executed successfully!")
+        
+    except Exception as e:
+        print(f"\n✗ Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
+    finally:
+        spark.stop()
 
 
 if __name__ == "__main__":
