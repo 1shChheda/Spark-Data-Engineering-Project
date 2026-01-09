@@ -2,7 +2,7 @@ from pyspark.sql import SparkSession
 from pyspark.ml.feature import VectorAssembler, StandardScaler
 from pyspark.ml.clustering import KMeans
 from pyspark.ml import Pipeline
-from pyspark.sql.functions import col
+from pyspark.sql.functions import col, when
 import os
 
 
@@ -103,6 +103,9 @@ class CustomerSegmentation:
             
             print(f"    Cost: {cost:.2f}")
         
+        #unpersist to free memory
+        df_scaled.unpersist()
+        
         #find elbow point (simple heuristic)
         optimal_k = 5  # Default
         
@@ -149,12 +152,71 @@ class CustomerSegmentation:
         return model, kmeans_model
     
     def assign_segments(self, df, model):
-        # TODO: assign clusters and create business segments
-        pass
+        #assign clusters and create business segments
+        print("\nAssigning segments to customers...")
+        
+        #predict clusters
+        df_clustered = model.transform(df)
+        
+        #calculate cluster statistics for naming
+        cluster_stats = df_clustered.groupBy("cluster_id").agg(
+            {"recency_days": "avg", "frequency": "avg", "monetary": "avg"}
+        ).collect()
+        
+        #create mapping based on RFM characteristics
+        segment_mapping = {}
+        for row in cluster_stats:
+            cluster_id = row["cluster_id"]
+            avg_recency = row["avg(recency_days)"]
+            avg_frequency = row["avg(frequency)"]
+            avg_monetary = row["avg(monetary)"]
+            
+            #simple heuristic for segment naming
+            if avg_recency < 60 and avg_frequency > 5 and avg_monetary > 500:
+                segment_mapping[cluster_id] = "Champions"
+            elif avg_recency < 90 and avg_frequency > 3:
+                segment_mapping[cluster_id] = "Loyal Customers"
+            elif avg_recency < 60 and avg_frequency <= 3:
+                segment_mapping[cluster_id] = "Promising"
+            elif avg_recency >= 180 and avg_frequency > 3:
+                segment_mapping[cluster_id] = "At Risk"
+            elif avg_recency >= 180:
+                segment_mapping[cluster_id] = "Hibernating"
+            else:
+                segment_mapping[cluster_id] = "Needs Attention"
+        
+        #apply mapping
+        mapping_expr = when(col("cluster_id") == 0, segment_mapping.get(0, "Other"))
+        for cluster_id in range(1, len(segment_mapping)):
+            mapping_expr = mapping_expr.when(
+                col("cluster_id") == cluster_id, 
+                segment_mapping.get(cluster_id, "Other")
+            )
+        
+        df_segmented = df_clustered.withColumn("segment_name", mapping_expr)
+        
+        print(f"✓ Assigned segments to {df_segmented.count():,} customers")
+        
+        return df_segmented
     
     def generate_segment_profiles(self, df_segmented):
-        # TODO: generate detailed segment profiles
-        pass
+        #generate detailed segment profiles
+        print("\nGenerating segment profiles...")
+        
+        segment_profiles = df_segmented.groupBy("segment_name").agg(
+            {"CustomerID": "count",
+             "recency_days": "avg",
+             "frequency": "avg",
+             "monetary": "avg",
+             "avg_transaction_value": "avg",
+             "unique_products": "avg",
+             "engagement_score_fe": "avg"}  # use _fe version
+        ).orderBy(col("count(CustomerID)").desc())
+        
+        print("\n Segment Profiles:")
+        segment_profiles.show(truncate=False)
+        
+        return segment_profiles
     
     def save_model(self, model, model_metadata):
         # TODO: save model and metadata
@@ -178,6 +240,8 @@ class CustomerSegmentation:
         
         #find optimal k
         optimal_k, costs = self.find_optimal_k(df_prepared, feature_cols)
+        #fix: use optimal_k
+        n_clusters = optimal_k
         
         #train model
         model, kmeans_model = self.train_clustering_model(
@@ -186,7 +250,13 @@ class CustomerSegmentation:
             n_clusters=n_clusters
         )
         
-        # TODO: rest...
+        #assign segments
+        df_segmented = self.assign_segments(df_prepared, model)
+        
+        #generate profiles
+        segment_profiles = self.generate_segment_profiles(df_segmented)
+        
+        # TODO: saves...
         print("\n✓ Partial pipeline executed!")
 
 
