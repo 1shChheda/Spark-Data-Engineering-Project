@@ -82,13 +82,13 @@ class GoldLayer:
             avg("Quantity").alias("avg_items_per_transaction")
         )
         
-        #product diversity
+        #added product diversity metrics
         product_diversity = df_valid.groupBy("CustomerID").agg(
             count(col("StockCode")).alias("unique_products"),
             count(col("Description")).alias("unique_categories")
         )
         
-        #temporal patterns
+        #added temporal patterns
         temporal = df_valid.groupBy("CustomerID").agg(
             avg(when(col("is_weekend"), 1).otherwise(0)).alias("weekend_purchase_ratio"),
             avg("hour").alias("avg_purchase_hour")
@@ -100,14 +100,6 @@ class GoldLayer:
             .join(behavior_metrics, "CustomerID", "left") \
             .join(product_diversity, "CustomerID", "left") \
             .join(temporal, "CustomerID", "left")
-        
-        #add value tiers
-        customer_360 = customer_360.withColumn(
-            "value_tier",
-            when(col("monetary") >= customer_360.approxQuantile("monetary", [0.75], 0.01)[0], "High Value")
-            .when(col("monetary") >= customer_360.approxQuantile("monetary", [0.25], 0.01)[0], "Medium Value")
-            .otherwise("Low Value")
-        )
         
         #write to Gold
         gold_path = os.path.join(self.gold_path, "customer_360")
@@ -156,20 +148,10 @@ class GoldLayer:
             count("InvoiceNo").alias("purchase_frequency")
         )
         
-        #return rate
-        returns = df_trans.filter(col("is_return")).groupBy("StockCode").agg(
-            count("*").alias("return_count")
-        )
-        
-        product_with_returns = product_perf.join(returns, "StockCode", "left") \
-            .fillna(0, ["return_count"]) \
-            .withColumn("return_rate", 
-                    col("return_count") / (col("purchase_frequency") + col("return_count")))
-        
-        #join with catalog - DROP duplicate columns from df_products
+        #drop duplicate columns from df_products before join
         product_gold = df_products \
             .drop("total_revenue", "total_quantity_sold") \
-            .join(product_with_returns, "StockCode", "left") \
+            .join(product_perf, "StockCode", "left") \
             .withColumnRenamed("total_revenue_gold", "total_revenue") \
             .withColumnRenamed("total_quantity_gold", "total_quantity_sold")
         
