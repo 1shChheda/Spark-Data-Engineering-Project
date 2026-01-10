@@ -115,6 +115,58 @@ services:
       timeout: 5s
       retries: 5
 
+  api:
+    build:
+      context: ..
+      dockerfile: docker/api/Dockerfile
+    container_name: retail_api
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DATA_PATH=/app/data
+      - PYTHONPATH=/app
+    volumes:
+      - ../src:/app/src
+      - ../data:/app/data
+      - ../config:/app/config
+    depends_on:
+      - redis
+      - spark-app
+    networks:
+      - retail-network
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  jupyter:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: retail_jupyter
+    ports:
+      - "8888:8888"
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip:/app
+    volumes:
+      - ../notebooks:/app/notebooks
+      - ../data:/app/data
+      - ../src:/app/src
+      - ../config:/app/config
+    working_dir: /app/notebooks
+    networks:
+      - retail-network
+    command: >
+      bash -c "
+      pip install jupyterlab notebook ipywidgets &&
+      jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token=''
+      "
+
 networks:
   retail-network:
     driver: bridge
