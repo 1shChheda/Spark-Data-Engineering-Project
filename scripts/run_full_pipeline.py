@@ -9,6 +9,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.spark_session import create_spark_session, stop_spark_session
+from src.processing.bronze_layer import BronzeLayer
 
 
 class PipelineOrchestrator:
@@ -24,17 +25,36 @@ class PipelineOrchestrator:
         symbol = "▶" if status == "START" else "✓" if status == "DONE" else "✗"
         print(f"\n{symbol} [{timestamp}] {step_name} - {status}")
         
+    def run_bronze_layer(self):
+        ##step 1: ingest raw data
+        self.log_step("BRONZE LAYER: Raw Data Ingestion")
+        
+        bronze = BronzeLayer(self.spark)
+        excel_file = "data/raws/Online_Retail.xlsx"  # Wrong path: raws instead of raw
+        
+        if not os.path.exists(excel_file):
+            raise FileNotFoundError(
+                f"Excel file not found: {excel_file}\n"
+                "Please place Online_Retail.xlsx in data/raw/ directory"
+            )
+        
+        bronze.ingest_transactions(excel_file)
+        self.log_step("BRONZE LAYER: Raw Data Ingestion", "DONE")
+        
     def run_complete_pipeline(self, skip_bronze=False):
         #run complete end-to-end pipeline
         print("\n" + "="*80)
         print(" RETAIL INTELLIGENCE PLATFORM - COMPLETE PIPELINE")
         print("="*80)
-        print(f"Start Time: {self.start_time.strftime('%Y-%m-%d %H:%M:%S') }
+        print(f"Start Time: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         print("="*80)
         
         try:
-            #TODO: implemention of steps
-            pass
+            ##step 1: Bronze layer
+            if not skip_bronze:
+                self.run_bronze_layer()
+            else:
+                print("\n⏭  Skipping Bronze layer (already exists)")
             
             #summary
             end_time = datetime.now()
@@ -60,6 +80,17 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='Run Retail Intelligence Pipeline')
+    parser.add_argument(
+        '--skip-bronze',
+        action='store_true',
+        help='Skip bronze layer ingestion (use existing data)'
+    )
+    parser.add_argument(
+        '--step',
+        choices=['bronze'],
+        help='Run only specific step'
+    )
+    
     args = parser.parse_args()
     
     #create Spark session
@@ -67,7 +98,14 @@ def main():
     
     try:
         orchestrator = PipelineOrchestrator(spark)
-        orchestrator.run_complete_pipeline(skip_bronze=args.skip_bronze)
+        
+        if args.step:
+            #run specific step
+            if args.step == 'bronze':
+                orchestrator.run_bronze_layer()
+        else:
+            #run complete pipeline
+            orchestrator.run_complete_pipeline(skip_bronze=args.skip_bronze)
             
     except Exception as e:
         print(f"\n✗ Error: {str(e)}")
