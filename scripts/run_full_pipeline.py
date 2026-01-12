@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from src.spark_session import create_spark_session, stop_spark_session
 from src.processing.bronze_layer import BronzeLayer
+from src.processing.silver_layer import SilverLayer
 
 
 class PipelineOrchestrator:
@@ -30,7 +31,7 @@ class PipelineOrchestrator:
         self.log_step("BRONZE LAYER: Raw Data Ingestion")
         
         bronze = BronzeLayer(self.spark)
-        excel_file = "data/raws/Online_Retail.xlsx"  # Wrong path: raws instead of raw
+        excel_file = "data/raw/Online_Retail.xlsx"
         
         if not os.path.exists(excel_file):
             raise FileNotFoundError(
@@ -40,6 +41,17 @@ class PipelineOrchestrator:
         
         bronze.ingest_transactions(excel_file)
         self.log_step("BRONZE LAYER: Raw Data Ingestion", "DONE")
+        
+    def run_silver_layer(self):
+        ##step 2: clean and validate data
+        self.log_step("SILVER LAYER: Data Cleaning & Validation")
+        
+        silver = SilverLayer(self.spark)
+        silver.clean_transactions()
+        silver.create_customer_profiles()
+        silver.create_product_catalog()
+        
+        self.log_step("SILVER LAYER: Data Cleaning & Validation", "DONE")
         
     def run_complete_pipeline(self, skip_bronze=False):
         #run complete end-to-end pipeline
@@ -55,6 +67,9 @@ class PipelineOrchestrator:
                 self.run_bronze_layer()
             else:
                 print("\n⏭  Skipping Bronze layer (already exists)")
+            
+            ##step 2: Silver layer
+            self.run_silver_layer()
             
             #summary
             end_time = datetime.now()
@@ -87,7 +102,7 @@ def main():
     )
     parser.add_argument(
         '--step',
-        choices=['bronze'],
+        choices=['bronze', 'silver'],
         help='Run only specific step'
     )
     
@@ -101,8 +116,11 @@ def main():
         
         if args.step:
             #run specific step
-            if args.step == 'bronze':
-                orchestrator.run_bronze_layer()
+            step_map = {
+                'bronze': orchestrator.run_bronze_layer,
+                'silver': orchestrator.run_silver_layer
+            }
+            step_map[args.step]()
         else:
             #run complete pipeline
             orchestrator.run_complete_pipeline(skip_bronze=args.skip_bronze)
