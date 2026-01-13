@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from src.spark_session import create_spark_session, stop_spark_session
 from src.processing.bronze_layer import BronzeLayer
 from src.processing.silver_layer import SilverLayer
+from src.processing.gold_layer import GoldLayer
 
 
 class PipelineOrchestrator:
@@ -53,6 +54,18 @@ class PipelineOrchestrator:
         
         self.log_step("SILVER LAYER: Data Cleaning & Validation", "DONE")
         
+    def run_gold_layer(self):
+        ##step 3: create business analytics
+        self.log_step("GOLD LAYER: Business Analytics")
+        
+        gold = GoldLayer(self.spark)
+        gold.create_customer_360()
+        gold.create_product_metrics()
+        gold.create_daily_aggregates()
+        gold.country_analytics()
+        
+        self.log_step("GOLD LAYER: Business Analytics", "DONE")
+        
     def run_complete_pipeline(self, skip_bronze=False):
         #run complete end-to-end pipeline
         print("\n" + "="*80)
@@ -70,6 +83,9 @@ class PipelineOrchestrator:
             
             ##step 2: Silver layer
             self.run_silver_layer()
+            
+            ##step 3: Gold layer
+            self.run_gold_layer()
             
             #summary
             end_time = datetime.now()
@@ -102,7 +118,7 @@ def main():
     )
     parser.add_argument(
         '--step',
-        choices=['bronze', 'silver'],
+        choices=['bronze', 'silver', 'gold'],
         help='Run only specific step'
     )
     
@@ -118,7 +134,8 @@ def main():
             #run specific step
             step_map = {
                 'bronze': orchestrator.run_bronze_layer,
-                'silver': orchestrator.run_silver_layer
+                'silver': orchestrator.run_silver_layer,
+                'gold': orchestrator.run_gold_layer
             }
             step_map[args.step]()
         else:
