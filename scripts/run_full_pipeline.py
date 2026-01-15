@@ -12,6 +12,7 @@ from src.spark_session import create_spark_session, stop_spark_session
 from src.processing.bronze_layer import BronzeLayer
 from src.processing.silver_layer import SilverLayer
 from src.processing.gold_layer import GoldLayer
+from src.processing.feature_engineering import FeatureEngineering
 
 
 class PipelineOrchestrator:
@@ -62,9 +63,20 @@ class PipelineOrchestrator:
         gold.create_customer_360()
         gold.create_product_metrics()
         gold.create_daily_aggregates()
-        gold.country_analytics()
+        gold.create_country_analytics()
         
         self.log_step("GOLD LAYER: Business Analytics", "DONE")
+        
+    def run_feature_engineering(self):
+        ##step 4: create ML features
+        self.log_step("FEATURE ENGINEERING: ML Features")
+        
+        fe = FeatureEngineering(self.spark)
+        fe.create_customer_features()
+        fe.create_product_features()
+        fe.create_transaction_featurs()
+        
+        self.log_step("FEATURE ENGINEERING: ML Features", "DONE")
         
     def run_complete_pipeline(self, skip_bronze=False):
         #run complete end-to-end pipeline
@@ -86,6 +98,9 @@ class PipelineOrchestrator:
             
             ##step 3: Gold layer
             self.run_gold_layer()
+            
+            ##step 4: Feature engg.
+            self.run_feature_engineering()
             
             #summary
             end_time = datetime.now()
@@ -118,7 +133,7 @@ def main():
     )
     parser.add_argument(
         '--step',
-        choices=['bronze', 'silver', 'gold'],
+        choices=['bronze', 'silver', 'gold', 'features'],
         help='Run only specific step'
     )
     
@@ -135,7 +150,8 @@ def main():
             step_map = {
                 'bronze': orchestrator.run_bronze_layer,
                 'silver': orchestrator.run_silver_layer,
-                'gold': orchestrator.run_gold_layer
+                'gold': orchestrator.run_gold_layer,
+                'features': orchestrator.run_feature_engineering
             }
             step_map[args.step]()
         else:
