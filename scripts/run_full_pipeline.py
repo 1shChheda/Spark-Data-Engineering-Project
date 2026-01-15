@@ -13,6 +13,7 @@ from src.processing.bronze_layer import BronzeLayer
 from src.processing.silver_layer import SilverLayer
 from src.processing.gold_layer import GoldLayer
 from src.processing.feature_engineering import FeatureEngineering
+from src.models.segmentation.clustering import CustomerSegmentation
 
 
 class PipelineOrchestrator:
@@ -74,9 +75,19 @@ class PipelineOrchestrator:
         fe = FeatureEngineering(self.spark)
         fe.create_customer_features()
         fe.create_product_features()
-        fe.create_transaction_featurs()
+        fe.create_transaction_features()
         
         self.log_step("FEATURE ENGINEERING: ML Features", "DONE")
+        
+    def run_ml_models(self):
+        #step 5: train ML models
+        self.log_step("MACHINE LEARNING: Model Training")
+        
+        #customer segmentation
+        segmentation = CustomerSegmentation(self.spark)
+        segmentation.run_segmentation(n_clusters=5)
+        
+        self.log_step("MACHINE LEARNING: Model Training", "DONE")
         
     def run_complete_pipeline(self, skip_bronze=False):
         #run complete end-to-end pipeline
@@ -102,6 +113,9 @@ class PipelineOrchestrator:
             ##step 4: Feature engg.
             self.run_feature_engineering()
             
+            ##step 5: ML models
+            self.run_ml_models()
+            
             #summary
             end_time = datetime.now()
             duration = (end_time - self.start_time).total_seconds()
@@ -113,6 +127,19 @@ class PipelineOrchestrator:
             print(f"End Time:      {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
             print(f"Duration:      {duration:.2f} seconds ({duration/60:.2f} minutes)")
             print("="*80)
+            
+            print("\n Output Locations:")
+            print(f"   Bronze Tables:     data/bronze/")
+            print(f"   Silver Tables:     data/silver/")
+            print(f"   Gold Tables:       data/gold/")
+            print(f"   Feature Store:     data/feature_store/")
+            print(f"   ML Models:         data/models/")
+            
+            print("\n Next Steps:")
+            print("   1. Start API: make api-start")
+            print("   2. View API docs: http://localhost:8000/docs")
+            print("   3. Query segments: GET /api/v1/segments")
+            print("   4. Get customer insights: GET /api/v1/customer/{id}")
             
         except Exception as e:
             print(f"\n✗ Pipeline failed: {str(e)}")
@@ -133,7 +160,7 @@ def main():
     )
     parser.add_argument(
         '--step',
-        choices=['bronze', 'silver', 'gold', 'features'],
+        choices=['bronze', 'silver', 'gold', 'features', 'ml'],
         help='Run only specific step'
     )
     
@@ -151,7 +178,8 @@ def main():
                 'bronze': orchestrator.run_bronze_layer,
                 'silver': orchestrator.run_silver_layer,
                 'gold': orchestrator.run_gold_layer,
-                'features': orchestrator.run_feature_engineering
+                'features': orchestrator.run_feature_engineering,
+                'ml': orchestrator.run_ml_models
             }
             step_map[args.step]()
         else:
