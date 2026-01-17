@@ -11,7 +11,7 @@ import sys
 #adding project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from src.api.routers import health
+from src.api.routers import analytics, health
 
 #init FastAPI app
 app = FastAPI(
@@ -33,6 +33,7 @@ app.add_middleware(
 
 #routers
 app.include_router(health.router, prefix="/health", tags=["Health"])
+app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["Analytics"])
 
 
 @app.get("/")
@@ -54,6 +55,10 @@ async def api_info():
         "service": "Retail Intelligence Platform",
         "version": "1.0.0",
         "available_endpoints": {
+            "analytics": {
+                "customer_overview": "/api/v1/analytics/customers/overview",
+                "product_overview": "/api/v1/analytics/products/overview"
+            },
             "health": {
                 "health_check": "/health",
                 "readiness": "/health/ready"
