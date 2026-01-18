@@ -41,7 +41,7 @@ async def get_customer_overview():
         spark = get_spark()
         
         #read customer 360
-        df = spark.read.format("delta").load("data/gold/customer360")
+        df = spark.read.format("delta").load("data/gold/customer_360")
         
         #calculate metrics
         total_customers = df.count()

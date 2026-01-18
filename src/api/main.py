@@ -11,7 +11,7 @@ import sys
 #adding project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from src.api.routers import analytics, health
+from src.api.routers import analytics, segments, health
 
 #init FastAPI app
 app = FastAPI(
@@ -34,6 +34,7 @@ app.add_middleware(
 #routers
 app.include_router(health.router, prefix="/health", tags=["Health"])
 app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["Analytics"])
+app.include_router(segments.router, prefix="/api/v1/segments", tags=["Segments"])
 
 
 @app.get("/")
@@ -57,7 +58,13 @@ async def api_info():
         "available_endpoints": {
             "analytics": {
                 "customer_overview": "/api/v1/analytics/customers/overview",
-                "product_overview": "/api/v1/analytics/products/overview"
+                "product_overview": "/api/v1/analytics/products/overview",
+                "revenue_trends": "/api/v1/analytics/revenue/trends"
+            },
+            "segments": {
+                "list_segments": "/api/v1/segments/",
+                "segment_details": "/api/v1/segments/{segment_name}",
+                "customer_segment": "/api/v1/segments/customer/{customer_id}"
             },
             "health": {
                 "health_check": "/health",
