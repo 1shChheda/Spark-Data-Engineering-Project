@@ -62,12 +62,14 @@ async def get_segment_details(
             raise HTTPException(status_code=404, detail=f"Segment '{segment_name}' not found")
         
         #calculate statistics
+        from pyspark.sql.functions import count, avg, sum as spark_sum
+        
         stats = segment_df.agg(
             count("*").alias("customer_count"),
             avg("recency_days").alias("avg_recency"),
             avg("frequency").alias("avg_frequency"),
             avg("monetary").alias("avg_monetary"),
-            sum("monetary").alias("total_revenue")
+            spark_sum("monetary").alias("total_revenue")
         ).collect()[0]
         
         return SegmentDetail(
